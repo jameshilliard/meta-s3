@@ -6,7 +6,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=d32239bcb673463ab874e80d47fae504"
 
 DEPENDS = "ncurses curl udev"
 
-SRCREV = "9a0b1095424cbcf92f3657077eb5c71e500b5cfb"
+SRCREV = "62573e7f57e986df50ee639ad4aef2f25e0f3174"
 #PV = "${SRCREV}+git${SRCPV}"
 #SRCREV = "4.9.1"
 #PV = "${SRCREV}+${SRCPV}"
