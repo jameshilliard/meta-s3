@@ -4,6 +4,8 @@ TARGET = bitmain_spi
 
 OBJECT = bitmain-asic-drv.o sha2.o spi.o fpga.o
 
+EXTRA_CFLAGS += $(BOARD_TYPE)
+
 ifneq ($(KERNELRELEASE),)
 
 #kbuild syntax.
