@@ -27,10 +27,6 @@
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
 
-#include <linux/timer.h>
-#include <linux/timex.h>
-#include <linux/rtc.h>
-
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -51,7 +47,6 @@ module_param(rx_st_prnt,bool,S_IRUGO);
 
 unsigned int hardware_version = 0;
 static unsigned long Prnt_time_out = 0;
-unsigned int GREEN, RED;
 static void Prnt(unsigned long data);
 void ChangePWM(BT_AS_INFO dev, unsigned int pwm_percent);
 
@@ -60,8 +55,6 @@ void ChangePWM(BT_AS_INFO dev, unsigned int pwm_percent);
 #define DRV_VERSION	"0.1.1"
 
 #define	PRNT_TIMER_EN	1
-#define CHAIN_POWER_TIME_INTERAL	5
-
 
 #define	TIMER_NUM	2
 #define TIMER_INTERRUPT		(15 + TIMER_NUM)
@@ -76,20 +69,14 @@ void ChangePWM(BT_AS_INFO dev, unsigned int pwm_percent);
 
 //extern struct file_operations *bitmain_fops_p;
 
-unsigned int gNonce_num = 0, gNonce_Err = 0, gNonce_miss = 0, gDiff_nonce_num = 0, gSubmit_nonce_num = 0;
+unsigned int gNonce_num = 0, gNonce_Err = 0, gNonce_miss = 0, gDiff_nonce_num = 0;
 uint32_t last_read_nonce_jiffies = 0;
 
 uint16_t gTotal_asic_num = 0;
 uint8_t gChain_Asic_Check_bit[CHAIN_SIZE] = {0};
-uint8_t gChain_Asic_Interval[CHAIN_SIZE] = {0};
 uint8_t gChain_Asic_num[CHAIN_SIZE] = {0};
 uint32_t gChain_Asic_status[CHAIN_SIZE][256/32];
 uint32_t gAsic_cnt[CHAIN_SIZE][256];
-uint32_t Chain_nonce_nu[CHAIN_SIZE] = {0};
-uint32_t Chain_nonce_nu_last[CHAIN_SIZE] = {0};
-
-
-static unsigned char config_fpga = 0;
 
 #if PRNT_TIMER_EN
 static struct timer_list prnt_timer;
@@ -119,13 +106,13 @@ typedef struct __BT_AS_info
 }*BT_AS_INFO;
 #endif
 
-struct __BT_AS_info bitmain_asic_dev;
+static struct __BT_AS_info bitmain_asic_dev;
 struct inode bitmain_inode;
 struct file bitmain_file;
 
 static unsigned long bitmain_is_open;
-static void *gpio1_vaddr;
-void *gpio0_vaddr;
+static void *gpio0_vaddr, *gpio1_vaddr;
+
 uint8_t asic_return_bytes = 5;
 // --------------------------------------------------------------
 //      CRC16 check table
@@ -360,7 +347,6 @@ extern int hashtest(ASIC_TASK_P asic_task, uint32_t nonce)
 	BT_AS_INFO dev = &bitmain_asic_dev;
 	unsigned char hash1[32];
 	unsigned char hash2[32];
-	unsigned char i;
 	uint32_t *hash2_32 = (uint32_t *)hash1;
 	__attribute__ ((aligned (4)))  sha2_context ctx;
 	memcpy(ctx.state, (void*)asic_task->midstate, 32);
@@ -393,78 +379,6 @@ extern int hashtest(ASIC_TASK_P asic_task, uint32_t nonce)
 		//printk("nonce error\n");
 		return 0;
 	}
-	else if( dev->nonce_diff !=0 )
-	{
-		for(i=0; i < dev->asic_configure.diff_sh_bit/32; i++)
-		{
-			if(be32toh(hash2_32[6 - i]) != 0)
-				break;
-		}
-		if(i == dev->asic_configure.diff_sh_bit/32)
-		if(be32toh(hash2_32[6 - dev->asic_configure.diff_sh_bit/32]) < ((uint32_t)0xffffffff >> (dev->asic_configure.diff_sh_bit%32)))
-		//if((hash2_32[6 - dev->asic_configure.diff_sh_bit/32] & ((0x01 << ((dev->asic_configure.diff_sh_bit)%32 + 1))-1)) == 0x00)
-		{
-			printk(KERN_ERR "match diff %d hash2_32[%d]{0x%08x}\n", dev->asic_configure.diff_sh_bit,
-				6 - dev->asic_configure.diff_sh_bit/32,be32toh(hash2_32[6 - dev->asic_configure.diff_sh_bit/32]));
-			//printk("diff cpare {0x%08x}\n", ((0x01 << ((dev->asic_configure.diff_sh_bit - 1)%32 + 1))-1));
-			gDiff_nonce_num++;
-			dev->diff1_num += (0x01UL << dev->nonce_diff);
-			dev->total_nonce_num++;
-			if(dev->net_diff_sh_bit != 0)
-			{
-
-				for(i=0; i < dev->net_diff_sh_bit/32; i++)
-				{
-					if(be32toh(hash2_32[6 - i]) != 0)
-						break;
-				}
-				if(i == dev->net_diff_sh_bit/32)
-				{
-					if(be32toh(hash2_32[6 - dev->net_diff_sh_bit/32]) < ((uint32_t)0xffffffff >> (dev->net_diff_sh_bit%32)))
-					{
-						printk(KERN_ERR "\n###Get Block##\n");
-						dev->get_blk_num++;
-						struct timex  txc;
-						struct rtc_time tm;
-						struct file *fp_pwerr;
-						mm_segment_t old_fs;
-						char wr_buf[1024];
-						unsigned int wr_len = 0;
-						do_gettimeofday(&(txc.time));
-						rtc_time_to_tm(txc.time.tv_sec,&tm);
-						printk("UTC time :%d-%d-%d %d:%d:%d \n",tm.tm_year+1900,tm.tm_mon + 1, tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec);
-						fp_pwerr = filp_open("/config/getblk", O_RDWR | O_CREAT | O_APPEND, 0644);
-						wr_len = sprintf(wr_buf, "UTC time:%d-%d-%d %d:%d:%d %08x%08x%08x%08x%08x%08x%08x%08x\n",tm.tm_year+1900,tm.tm_mon + 1, tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec,
-							be32toh(hash2_32[7]),be32toh(hash2_32[6]),be32toh(hash2_32[5]),be32toh(hash2_32[4]),
-							be32toh(hash2_32[3]),be32toh(hash2_32[2]),be32toh(hash2_32[1]),be32toh(hash2_32[0]));
-					    old_fs = get_fs();
-					    set_fs(KERNEL_DS);
-					    fp_pwerr->f_op->write(fp_pwerr, (char *)wr_buf, wr_len, &fp_pwerr->f_pos);
-					    set_fs(old_fs);
-					    filp_close(fp_pwerr, NULL);
-					}
-				}
-			}
-			return 2;
-		}
-		else if(be32toh(hash2_32[6 - dev->nonce_diff/32]) < ((uint32_t)0xffffffff >> (dev->nonce_diff%32)))
-		{
-			dev->diff1_num += (0x01UL << dev->nonce_diff);
-			dev->total_nonce_num++;
-		}
-		else
-			printk(KERN_ERR "match1 diff %d hash2_32{0x%08x}\n", dev->nonce_diff, be32toh(hash2_32[6 - dev->nonce_diff/32]));
-		return 1;
-	}
-	else
-	{
-		dev->diff1_num += (0x01UL << dev->asic_configure.diff_sh_bit);
-		dev->total_nonce_num++;
-		return 1;
-	}
-	if((dev->total_nonce_num & 0xffffffff) == 0xffffffff)
-		dev->cgminer_start_time = jiffies;
-	#if 0
 	else if( dev->asic_configure.diff_sh_bit !=0 )
 	{
 		if(htonl(hash2_32[6 - dev->asic_configure.diff_sh_bit/32]) < ((uint32_t)0xffffffff >> (dev->asic_configure.diff_sh_bit%32)))
@@ -474,16 +388,18 @@ extern int hashtest(ASIC_TASK_P asic_task, uint32_t nonce)
 				6 - dev->asic_configure.diff_sh_bit/32,htonl(hash2_32[6 - dev->asic_configure.diff_sh_bit/32]));
 			//printk("diff cpare {0x%08x}\n", ((0x01 << ((dev->asic_configure.diff_sh_bit - 1)%32 + 1))-1));
 			gDiff_nonce_num++;
-			dev->total_nonce_num += 0x01 << dev->asic_configure.diff_sh_bit;
+			dev->total_nonce_num++;
 			return 2;
 		}
 		else
+		{
+			dev->total_nonce_num++;
 			return 1;
+		}
 	}
 	else
 		dev->total_nonce_num++;
 	return 1;
-	#endif
 	#if 0
 	unsigned char hash1[32];
 	unsigned char hash2[32];
@@ -522,26 +438,18 @@ extern int hashtest(ASIC_TASK_P asic_task, uint32_t nonce)
 	return 1;
 	#endif
 }
-
 static int bitmain_asic_open(struct inode *inode, struct file *file)
 {
-	struct file *fp_hwver;
-	mm_segment_t old_fs;
-	char wr_buf[512];
-	unsigned int wr_len = 0;
 	BT_AS_INFO dev = &bitmain_asic_dev;
 	void *gpio3_virtual, *gpio1_virtual;
 	void *ctl_md_vaddr;
 	uint32_t value32;
-	uint32_t detect_ver = 0;
-	uint32_t save_ver = 0;
 	uint8_t i;
 	/* only allow one at a time */
 	if (test_and_set_bit(0, &bitmain_is_open))
 		return -EBUSY;
 	file->private_data = dev;
 	memset(dev, 0, sizeof(bitmain_asic_dev));
-	#if	1
 	ctl_md_vaddr = ioremap_nocache(CONTROL_MODULE_BASE, CONTROL_MODULE_Size);
 	//vesion ctl gpio3_19:bit 0 gpio3_21:bit1 gpio1_18 bit2
 	iowrite32(PAD_REV | PAD_PULLUP | 0x7, ctl_md_vaddr + 0x9a4); //bit0
@@ -551,125 +459,29 @@ static int bitmain_asic_open(struct inode *inode, struct file *file)
 	gpio1_virtual = ioremap_nocache(GPIO1_BASE, GPIO1_SIZE);
 	value32 = ioread32(gpio3_virtual + GPIO_OE);
 	iowrite32(value32 | (((0x01<<19) | (0x01<<21))), gpio3_virtual + GPIO_OE); //set input
-	value32 = ioread32(gpio1_virtual + GPIO_OE);
+	value32 = ioread32(gpio3_virtual + GPIO_OE);
 	iowrite32(value32 | (0x01<<18), gpio1_virtual + GPIO_OE); //set input
 	hardware_version = 0;
 	value32 = ioread32(gpio3_virtual+ GPIO_DATAIN );
-	detect_ver |= ((value32 >> 19)&0x01)<<0x00;
-	detect_ver |= ((value32 >> 21)&0x01)<<0x01;
+	hardware_version |= ((value32 >> 19)&0x01)<<0x00;
+	hardware_version |= ((value32 >> 21)&0x01)<<0x01;
 	value32 = ioread32(gpio1_virtual+ GPIO_DATAIN );
-	detect_ver |= ((value32 >> 18)&0x01)<<0x02;
-	printk("Detect hardware version = %d\n", detect_ver);
-	hardware_version = detect_ver;
-	#ifdef FIX_HARDWARE_VER
-		printk("fix hardware version\n");
-		#if defined C1_02 || defined S5
-		if((detect_ver == 0x03) || ((detect_ver == 0x04)))
-			hardware_version = 0x01;
-		else
-			hardware_version = FIX_HARDWARE_VER;
-		#elif defined S2
-			;
-		#else
-		hardware_version = FIX_HARDWARE_VER;
-		#endif
-	#endif
-	save_ver = hardware_version;
-	hardware_version = detect_ver;
+	hardware_version |= ((value32 >> 18)&0x01)<<0x02;
 	printk("hardware_version = %#x\n", hardware_version);
-
-	fp_hwver = filp_open("/tmp/hwver", O_RDWR | O_CREAT | O_TRUNC, 0644);
-  	wr_len = sprintf(wr_buf, "hardware_ver = 0x%02x\n", hardware_version);
-    old_fs = get_fs();
-    set_fs(KERNEL_DS);
-    fp_hwver->f_op->write(fp_hwver, (char *)wr_buf, wr_len, &fp_hwver->f_pos);
-    set_fs(old_fs);
-    filp_close(fp_hwver, NULL);
-
 	iounmap(gpio3_virtual);
 	iounmap(gpio1_virtual);
-	#if defined S2
-	printk("S2 ctrl board V1.0\n");
-	#endif
-	hardware_version = save_ver;
 	if(hardware_version == 0x01)
-	{
-		//Set GPIO1_13(Green) GPIO0_23(Red) to GPIO mode
-		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x834); //Green
-		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x824); //Red
-		#if	defined C1_02 || defined S5
-		//Set GPIO1_13(Red) GPIO0_23(Green) to GPIO mode
-		if(detect_ver == 0x03)
-		{
-			GREEN = 0x01<<23;
-			RED = 0x01<<13;
-			printk("S5 ctrl board V1.0\n");
-		}
-		else if(detect_ver == 0x04)
-		{
-			GREEN = 0x01<<23;
-			RED = 0x01<<13;
-			printk("S5 ctrl board test V1.1\n");
-			iowrite32(PAD_PULLUP | PAD_REV | 0x7, ctl_md_vaddr + 0x828); //ip sig key gpio0_26
-		}
-		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x820); //hash test gpio0-22
-		#else
-		#if defined S4_PLUS
-			iowrite32(PAD_PULLUP | PAD_REV | 0x7, ctl_md_vaddr + 0x828); //ip sig key gpio0_26
-		#endif
-		GREEN = 0x01<<13;
-		RED = 0x01<<23;
-		#endif
-	}
-	else if(hardware_version == 0x02)
-	{
-		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x890); //Green
-		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x89C); //Red
-		GREEN = 0x01<<5;
-		RED = 0x01<<2;
-	}
+	;
 	else
 	{
 		//Set GPIO2_2(Green) GPIO2_5(Red) to GPIO mode
 		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x890); //Green
 		iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x89C); //Red
-		GREEN = 0x01<<2;
-		RED = 0x01<<5;
 	}
-	#if defined C1_02
-		if(hardware_version == 0x02) //GPMC_OEN_REN/TIMER7/EMU4/GPIO2_3
-			iowrite32(PAD_REV | PAD_PULLUP | 0x7, ctl_md_vaddr + 0x894); //recovery key
-		else
-			iowrite32(PAD_REV | PAD_PULLUP | 0x7, ctl_md_vaddr + 0x838); //recovery key
-	#else
-	iowrite32(PAD_REV | PAD_PULLUP | 0x7, ctl_md_vaddr + 0x838); //recovery key
-	#endif
-	iowrite32(PAD_REV | PAD_PULLUP | 0x7, ctl_md_vaddr + 0x950); //test key
-	//iounmap(ctl_md_vaddr);
-	#endif
+
+	iounmap(ctl_md_vaddr);
 	if(hardware_version == 0x01)
-	{
-		#if defined C1_02 || defined S5
-		if((detect_ver == 0x03) || (detect_ver == 0x04))
-		{
-			dev->led_virtual1 = ioremap_nocache(GPIO0_BASE, GPIO0_SIZE);	//green
-			value32 = ioread32(dev->led_virtual1 + GPIO_OE);
-			iowrite32(value32 & (~(GREEN)), dev->led_virtual1 + GPIO_OE); //set output
-			dev->led_virtual = ioremap_nocache(GPIO1_BASE, GPIO1_SIZE);		//red
-			value32 = ioread32(dev->led_virtual + GPIO_OE);
-			iowrite32(value32 & (~(RED)), dev->led_virtual + GPIO_OE); //set output
-		}
-		else
-		#endif
-		{
-			dev->led_virtual1 = ioremap_nocache(GPIO1_BASE, GPIO1_SIZE);
-			value32 = ioread32(dev->led_virtual1 + GPIO_OE);
-			iowrite32(value32 & (~(GREEN)), dev->led_virtual1 + GPIO_OE); //set output
-			dev->led_virtual = ioremap_nocache(GPIO0_BASE, GPIO0_SIZE);
-			value32 = ioread32(dev->led_virtual + GPIO_OE);
-			iowrite32(value32 & (~(RED)), dev->led_virtual + GPIO_OE); //set output
-		}
-	}
+		;
 	else
 	{
 		dev->led_virtual = ioremap_nocache(GPIO2_BASE, GPIO2_SIZE);
@@ -691,9 +503,7 @@ static int bitmain_asic_open(struct inode *inode, struct file *file)
 	spin_lock_init(&dev->lock);
 	mutex_init(&dev->result_lock);
 	mutex_init(&dev->to_work_lock);
-	dev->asic_configure.timeout_data = 7;
 	ChangePWM(dev, 0);
-	//bitmain_set_voltage(dev, 0x0750);
 	dev->last_nonce_timeout = 0; //挖矿时会响一下
 	//detect_chain_num(dev);
 	dev->send_to_fpga_work_wq = create_singlethread_workqueue(DRV_NAME);
@@ -705,17 +515,6 @@ static int bitmain_asic_open(struct inode *inode, struct file *file)
 	//add_timer(&prnt_timer);
 	#endif
 	init_beep(dev);
-
-	value32 = ioread32(gpio0_vaddr + GPIO_OE);
-	//iowrite32(0x01<<22, gpio0_vaddr + GPIO_SETDATAOUT);
-	iowrite32(value32 & (~(0x01<<22)), gpio0_vaddr + GPIO_OE); //set output
-	if(detect_ver == 0x04)
-	{
-		value32 = ioread32(gpio0_vaddr + GPIO_OE);
-		//iowrite32(0x01<<22, gpio0_vaddr + GPIO_SETDATAOUT);
-		iowrite32(value32 | (0x01<<26), gpio0_vaddr + GPIO_OE); //set input
-	}
-
 	printk(KERN_ERR "bitmain_asic_open ok\n");
 	return 0;
 }
@@ -723,49 +522,12 @@ static int bitmain_asic_open(struct inode *inode, struct file *file)
 static int bitmain_asic_close(struct inode *inode, struct file *file)
 {
 	BT_AS_INFO dev = &bitmain_asic_dev;
-	//uint32_t i;
-	//struct ASIC_TASK asic_task;
-	wait_queue_head_t timeout_wq;
-	init_waitqueue_head(&timeout_wq);
 	#if PRNT_TIMER_EN
 	del_timer(&prnt_timer);
 	#endif
 	destroy_workqueue(dev->send_to_fpga_work_wq);
-	if(config_fpga == 0)
-	{
-		#if 0
-		for(i = 0; i < dev->asic_status_data.chain_num; i++)
-		{
-			memset(asic_task.midstate, 0x00, sizeof(asic_task.midstate));
-			memset(asic_task.data, 0x00, sizeof(asic_task.data));
-			if(i == 0)
-				send_work_to_fpga(true, 0x80|dev->chain_map[i], dev, &asic_task);
-			else
-				send_work_to_fpga(false, 0x80|dev->chain_map[i], dev, &asic_task);
-		}
-		#endif
-		stop_work_to_all_chain(dev);
-	}
-	//send_work_to_fpga(true, 0, dev, &asic_task);
-	iowrite32(0x01<<8, gpio2_vaddr + GPIO_SETDATAOUT);
-	sleep_on_timeout(&timeout_wq, 100 * HZ/1000);//100ms
-	dev->asic_configure.timeout_data = 7;
-	dev->timeout_valid = true;
 	ChangePWM(dev, 0);
 	nonce_query(dev);
-	dev->timeout_valid = false;
-	if( dev->asic_configure.bauddiv != 26)
-	{
-		//iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
-		set_baud(dev, 26);
-		//iowrite32(0x01<<6, gpio2_vaddr + GPIO_CLEARDATAOUT);
-		bitmain_set_voltage(dev,0x0725);
-	}
-	iowrite32(0x01<<8, gpio2_vaddr + GPIO_CLEARDATAOUT);
-	//test
-	iowrite32(0x01<<22, gpio0_vaddr + GPIO_CLEARDATAOUT);
-	//close beep
-	iowrite32(0x01<<20, gpio0_vaddr + GPIO_CLEARDATAOUT);
 	iounmap(dev->beep_virtual_addr);
 	clear_bit(0, &bitmain_is_open);
 	//bitmain_asic_open_usb(dev);
@@ -775,150 +537,6 @@ static int bitmain_asic_close(struct inode *inode, struct file *file)
 	printk(KERN_ERR "bitmain_asic_close\n");
 	return 0;
 }
-
-void stop_work_to_all_chain(BT_AS_INFO dev)
-{
-	uint32_t i;
-	struct ASIC_TASK asic_task;
-	printk(KERN_ERR "stop send work to all chain\n");
-	memset(&asic_task, 0x00, sizeof(asic_task));
-	for(i = 0; i < dev->asic_status_data.chain_num; i++)
-	{
-		memset(asic_task.midstate, 0x00, sizeof(asic_task.midstate));
-		memset(asic_task.data, 0x00, sizeof(asic_task.data));
-		if(i == 0)
-			send_work_to_fpga(true, 0x80|dev->chain_map[i], dev, &asic_task);
-		else
-			send_work_to_fpga(false, 0x80|dev->chain_map[i], dev, &asic_task);
-	}
-}
-void check_chain_power(BT_AS_INFO dev)
-{
-	uint32_t bgNonce_average;
-	uint32_t time_elasp_ms = 0;
-	uint32_t i;
-	uint8_t chain_nu;
-	//struct ASIC_TASK asic_task;
-	static unsigned long simulate_power_err_time = 0;
-	wait_queue_head_t timeout_wq;
-	unsigned char cmd_buf[4] = {0};
-	if((dev->cgminer_start == true))
-	{
-		if(simulate_power_err_time == 0)
-		{
-			simulate_power_err_time = jiffies + 5 * 60 * 1000 * HZ/1000;
-		}
-		time_elasp_ms = jiffies_to_msecs(jiffies - dev->cgminer_start_time);
-		//printk("time_elasp_jiffies{%ld}\n", jiffies - dev->cgminer_start_time);
-		printk("jiffies{%ld}dev->cgminer_start_time{%ld}", jiffies, dev->cgminer_start_time);
-		printk("time_elasp_ms =%ldms dev->total_nonce_num{%ld}\n", time_elasp_ms, dev->total_nonce_num);
-		//bgNonce_average = ((uint32_t)dev->total_nonce_num / (time_elasp_ms / 1000)) * (CHAIN_POWER_TIME_INTERAL*60);//平均5分钟
-		if((time_elasp_ms / (1000 * CHAIN_POWER_TIME_INTERAL*60)) == 0)
-		{
-			bgNonce_average = (uint32_t)dev->total_nonce_num;
-			if(bgNonce_average < 8)
-				bgNonce_average = 1;
-			else
-				bgNonce_average /= 8;
-		}
-		else
-		{
-			bgNonce_average = (uint32_t)dev->total_nonce_num / (time_elasp_ms / (1000 * CHAIN_POWER_TIME_INTERAL*60));//平均5分钟
-			bgNonce_average /= 8;
-		}
-		for (i = 0; i < dev->asic_status_data.chain_num; i++)
-		{
-			chain_nu = dev->chain_map[i];
-			printk("bgNonce_average{%d}\n", bgNonce_average);
-			printk("chain%d Chain_nonce_nu[%ld] Chain_nonce_nu_last[%ld]\n", chain_nu,Chain_nonce_nu[chain_nu],Chain_nonce_nu_last[chain_nu]);
-			if(Chain_nonce_nu[chain_nu] >= Chain_nonce_nu_last[chain_nu])
-			{
-				if(((Chain_nonce_nu[chain_nu] - Chain_nonce_nu_last[chain_nu]) < bgNonce_average) || (bgNonce_average == 0))
-				//if(time_after(jiffies, simulate_power_err_time))
-				{
-					struct timex  txc;
-					struct rtc_time tm;
-					struct file *fp_pwerr;
-					mm_segment_t old_fs;
-					char wr_buf[512];
-					unsigned int wr_len = 0;
-					do_gettimeofday(&(txc.time));
-					rtc_time_to_tm(txc.time.tv_sec,&tm);
-					printk("UTC time :%d-%d-%d %d:%d:%d \n",tm.tm_year+1900,tm.tm_mon + 1, tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec);
-					fp_pwerr = filp_open("/config/power_rst", O_RDWR | O_CREAT | O_APPEND, 0644);
-					wr_len = sprintf(wr_buf, "UTC time :%d-%d-%d %d:%d:%d \n",tm.tm_year+1900,tm.tm_mon + 1, tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec);
-				    old_fs = get_fs();
-				    set_fs(KERNEL_DS);
-				    fp_pwerr->f_op->write(fp_pwerr, (char *)wr_buf, wr_len, &fp_pwerr->f_pos);
-				    set_fs(old_fs);
-				    filp_close(fp_pwerr, NULL);
-					dev->restarting_hash = true;
-					mod_timer(&prnt_timer, jiffies + 5 * 1000 * HZ/1000);
-					i = 0;
-					while(timer_pending(&prnt_timer))
-					{
-						del_timer(&prnt_timer);
-						if(i++ > 200)
-							break;
-					}
-					if(bgNonce_average == 0)
-						printk("!!!!!!!!!!----no hash power OK\n\n");
-					printk("remap chain%d(hardware chain%d) power err\n", i, chain_nu);
-					printk("bgNonce_average{%d}chain_nonce_nu{%d}last{%d}\n", bgNonce_average, Chain_nonce_nu[chain_nu], Chain_nonce_nu_last[chain_nu]);
-					#if 0
-					for(i = 0; i < dev->asic_status_data.chain_num; i++)
-					{
-						memset(asic_task.midstate, 0x00, sizeof(asic_task.midstate));
-						memset(asic_task.data, 0x00, sizeof(asic_task.data));
-						if(i == 0)
-							send_work_to_fpga(true, 0x80|dev->chain_map[i], dev, &asic_task);
-						else
-							send_work_to_fpga(false, 0x80|dev->chain_map[i], dev, &asic_task);
-					}
-					#endif
-					stop_work_to_all_chain(dev);
-					set_baud(dev, 26);
-					printk(KERN_ERR "Detect device for anyone power err\n");
-
-					cmd_buf[0] = 9;
-					cmd_buf[1] = 0x10; //16-23
-					cmd_buf[2] = 0x1f; //8-13
-					cmd_buf[0] |= 0x80;
-					//cmd_buf[3] = CRC5(cmd_buf, 4*8 - 5);
-					cmd_buf[3] = 0x00; //故意错误crc 只是修改fpga 波特率
-					send_BC_to_fpga(i, cmd_buf);
-
-					rst_hash_asic(dev);
-					//send_work_to_fpga(true, dev, &asic_task);
-					clear_fpga_nonce_buffer(dev);
-					init_waitqueue_head(&timeout_wq);
-					interruptible_sleep_on_timeout(&timeout_wq, 1000 * HZ/1000);//300ms
-					#if 1
-					rst_hash_asic(dev);
-					//send_work_to_fpga(true, dev, &asic_task);
-					clear_fpga_nonce_buffer(dev);
-					init_waitqueue_head(&timeout_wq);
-					interruptible_sleep_on_timeout(&timeout_wq, 1100 * HZ/1000);//300ms
-					#endif
-					//detect_chain_num(dev);
-					set_frequency(dev, dev->asic_configure.freq_vlaue);
-					asic_result_status_rd = asic_result_status_wr = asic_result_status_full = 0;
-					asic_result_rd = asic_result_wr = asic_result_full = 0;
-					//gDiff_nonce_num = gNonce_num = gNonce_Err = gNonce_miss = 0;
-					//gSubmit_nonce_num = 0;
-					dev->restarting_hash = false;
-					prnt_timer.expires = jiffies + dev->send_to_fpga_interval* HZ/1000;
-					add_timer(&prnt_timer);
-					mod_timer(&prnt_timer, jiffies + dev->send_to_fpga_interval* HZ/1000);
-					simulate_power_err_time = 0;
-					break;
-				}
-			}
-			Chain_nonce_nu_last[chain_nu] = Chain_nonce_nu[chain_nu];
-		}
-	}
-}
-
 void check_asic_status(BT_AS_INFO dev)
 {
 	uint32_t bgNonce_average;
@@ -978,24 +596,14 @@ void check_asic_status(BT_AS_INFO dev)
 
 void ChangePWM(BT_AS_INFO dev, unsigned int pwm_percent)
 {
-	dev->pwm_percent = pwm_percent;
 	pwm_percent = pwm_percent * PWM_ADJ_SCALE;
-	if(dev->fan_ctrl_type)//home
-	{
-		pwm_percent *=2;
-		pwm_percent /=6;
-	}
 	if (pwm_percent > 100)
 		pwm_percent = 100;
 	if(pwm_percent < LOW_PWM_PERCENT)
    		pwm_percent = LOW_PWM_PERCENT;
-	printk("pwm_percent{%d}\n", pwm_percent);
 	dev->pwm_high_value = pwm_percent * PWM_SCALE/100; //百分比
 	dev->pwm_low_value = (100 - pwm_percent) * PWM_SCALE/100;
 }
-
-#define TEMP_OUT 90
-#define TEMP_OUT_HIGHT (TEMP_OUT + 5)
 void adjust_pwm_from_temp(BT_AS_INFO dev)
 {
 	uint8_t i;
@@ -1021,21 +629,13 @@ void adjust_pwm_from_temp(BT_AS_INFO dev)
 			}
 		}
 	}
-	if ((temp_highest & 0xff) >= TEMP_OUT)
+	if ((temp_highest & 0xff) >= 80)
 	{
         dev->temp_out_fool = true;
 		printk(KERN_ERR "chain %d temp highest{%d}\n", wchain_highest, temp_highest);
 	}
     else
         dev->temp_out_fool = false;
-
-	if ((temp_highest & 0xff) >= TEMP_OUT_HIGHT)
-	{
-        dev->temp_out_high = true;
-		printk(KERN_ERR "chain %d temp out highest{%d}\n", wchain_highest, temp_highest);
-	}
-    else
-        dev->temp_out_high = false;
 	dev->temp_highest = temp_highest;
 	temper_change = temp_highest - last_temperature;
 	if (((temper_change > 0) && (temper_change >= TEMP_INTERVAL)) ||
@@ -1052,7 +652,8 @@ void adjust_pwm_from_temp(BT_AS_INFO dev)
         if (pwm_percent < 0)
             pwm_percent = 0;
 		printk("temp_highest{%d}\n", temp_highest);
-		ChangePWM(dev, pwm_percent);
+        printk("pwm_percent{%d}\n", pwm_percent);
+        ChangePWM(dev, pwm_percent);
 		llast_temperature = last_temperature;
         last_temperature = temp_highest;
     }
@@ -1196,26 +797,11 @@ void check_fan_speed(BT_AS_INFO dev)
 		dev->all_fan_stop = true;
 	else
 		dev->all_fan_stop = false;
-
-	for(i = 0; i < dev->fan_num; i++)
-	{
-		if((dev->fan_speed[dev->fan_map[i]] < 1000) && (dev->fan_speed[dev->fan_map[i]] != 0))
-			break;
-	}
-	if( i == dev->fan_num )
-	{
-		dev->any_fan_fail = false;
-		if(dev->all_fan_stop == true)
-			dev->any_fan_fail = true;
-	}
-	else
-		dev->any_fan_fail = true;
 }
 
 uint32_t snd_to_fpga_work = 0, ret_nonce_num = 0;
 uint32_t fifo_space;
-//#define CTRL_OFF
-//#define send_new_bl_CTRL
+
 //void send_to_pfga_work(BT_AS_INFO dev)
 void send_to_pfga_work(struct work_struct *work)
 {
@@ -1223,19 +809,9 @@ void send_to_pfga_work(struct work_struct *work)
 	uint8_t work_num = 0;
 	int ret = -1;
 	static unsigned long check_asic_status_timeout = 0;
-	static unsigned long check_chain_power_timeout = 0;
 	static unsigned long check_status_timeout = 0;
 	static unsigned long S1_timeout = 0;
 	static unsigned long M30_timeout = 0;
-	bool can_send_work = false;
-	static bool can_send_work_last = true;
-	#ifdef CTRL_OFF
-	unsigned long ctrl_s = 10;
-	static unsigned long ctrl_s_cnt =  10 * 1000 * 4 / 7;
-	static bool ctrl_status = false;
-	static unsigned long ctrl_time_off = 100; //ms
-	#endif
-	static uint32_t prnt_chin_nu = 0, prnt_aisc_nu = 0;
 	uint32_t i,j, k = 0;
 	bool no_nonce_timeout = false;
 	bool network_keeping = false;
@@ -1246,48 +822,16 @@ void send_to_pfga_work(struct work_struct *work)
 	//mutex_lock(&dev->to_work_lock);
 	if((dev->fpga_ok == false))
 		return;
-	/*
-	if(gTotal_asic_num == 0)
-	{
-		return;
-	}
-	*/
 	//iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
 	beep(dev);
-	#ifdef CTRL_OFF
-	if(ctrl_status)
+	if((g_FPGA_FIFO_SPACE <= g_FPGA_RESERVE_FIFO_SPACE) || (dev->temp_out_fool == true))
 	{
-		if(time_after(jiffies, ctrl_time_off))
-		{
-			ctrl_status = false;
-			ctrl_s_cnt =  ctrl_s * 1000 * 4 / 7;
-		}
-		goto no_send;
-	}
-	#endif
-
-	if((g_FPGA_FIFO_SPACE <= g_FPGA_RESERVE_FIFO_SPACE) /*|| (dev->temp_out_fool == true)*/)
-	{
-		/*
 		if((dev->temp_out_fool == true) && (time_after(jiffies, dev->last_nonce_timeout + 60 * 1000 * HZ/1000)))
 			over_temp_work = true;
-		*/
 		nonce_query(dev);
 	}
-
-	if((dev->temp_out_fool == true) && (dev->any_fan_fail == false))//warning
-		can_send_work = true;
-	else if(dev->temp_out_fool == false)
-		can_send_work = true;
-
-	if((dev->temp_out_high == true) && (dev->temp_out_ctrl == true))//prohibit
-		can_send_work = false;
-	else if((dev->temp_out_high == true) && (dev->temp_out_ctrl == false))
-		can_send_work = true;
-
-	//printk(KERN_ERR "can_send_work {%d}\n", can_send_work);
 	while((dev->task_buffer_rd != dev->task_buffer_wr) && (g_FPGA_FIFO_SPACE > g_FPGA_RESERVE_FIFO_SPACE)&&
-		(can_send_work == true)/*&& (snd_to_fpga_work < 1)*/)
+		((dev->temp_out_fool == false) || (dev->temp_out_ctrl == false) || (over_temp_work == true))/*&& (snd_to_fpga_work < 1)*/)
 	{
 		bool new_block = false;
 		//when temp out fool, don't send wort to fpga
@@ -1300,19 +844,6 @@ void send_to_pfga_work(struct work_struct *work)
 			dev->new_block = false;
 			new_block = true;
 		}
-		#ifdef send_new_bl_CTRL
-		if(time_after(jiffies, check_status_timeout) && (have_new_bl == false))
-		{
-			/*
-			dev->task_buffer_wr = dev->task_buffer_rd + 1;
-			if(dev->task_buffer_wr >= TASK_BUFFER_NUMBER)
-				dev->task_buffer_wr = 0;
-			dev->task_buffer_full = false;
-			*/
-			new_block = true;
-			have_new_bl = true;
-		}
-		#endif
 		network_keeping = true;
 		if(dev->last_nonce_timeout == 0)//开始时，响一下
 		{
@@ -1326,7 +857,7 @@ void send_to_pfga_work(struct work_struct *work)
 		dev->last_nonce_timeout = jiffies;
 		snd_to_fpga_work++;
 		dev->snding_work = true;
-		ret = send_work_to_fpga(new_block, 0, dev, &dev->task_buffer[dev->task_buffer_rd]);
+		ret = send_work_to_fpga(new_block, dev, &dev->task_buffer[dev->task_buffer_rd]);
 		dev->snding_work = false;
 		dev->save_send_work = dev->task_buffer_rd;
     	increase_variable_rehead_U32((uint32_t*) & dev->task_buffer_rd, dev->task_buffer_size);
@@ -1342,14 +873,6 @@ void send_to_pfga_work(struct work_struct *work)
 		}
 		if((over_temp_work == true) && (work_num == dev->temp_num))//保证每chain发一个work
 			over_temp_work = false;
-		#ifdef CTRL_OFF
-		if(ctrl_s_cnt-- == 0)
-		{
-			ctrl_status = true;
-			ctrl_time_off = jiffies + ctrl_time_off * HZ/1000;
-			break;
-		}
-		#endif
 	}
 	while( ret == 5)
 	{
@@ -1361,18 +884,9 @@ no_send:
 		if((dev->fifo_empt_cnt++ %100) == 0)
 			printk(KERN_ERR "drv fifo empty\n");
 	}
-
-	if((can_send_work_last == true) && (can_send_work == false))
-	{
-		//stop send work to all chain
-		printk("Stop all chain work send\n");
-		stop_work_to_all_chain(dev);
-		can_send_work_last = false;
-	}
 	if(check_asic_status_timeout == 0)
 	{
 		check_asic_status_timeout = jiffies + 60 * 1000 * HZ/1000;//60秒钟后超时
-		check_chain_power_timeout = jiffies +  90 * 1000 * HZ/1000;
 		check_status_timeout = jiffies + 10 * HZ/1000; //10ms后超时
 		S1_timeout = jiffies + 10 * HZ/1000; //10ms后超时
 		M30_timeout = S1_timeout;
@@ -1380,48 +894,44 @@ no_send:
 	if(time_after(jiffies, dev->last_nonce_timeout + 60 * 1000 * HZ/1000))// 1 分钟
 	{
 		no_nonce_timeout = true;
-		if(dev->pwm_percent !=0 )
-			ChangePWM(dev, 0);
+		ChangePWM(dev, 0);
 		nonce_query(dev);
 	}
 	if(time_after(jiffies, S1_timeout))
 	{
 		S1_timeout = jiffies + 1 * 1000 * HZ/1000; //1秒钟后超时
-		if((dev->temp_out_fool == true) && /*(dev->all_fan_stop == false)*/(can_send_work == true))
+		if((dev->temp_out_fool == true) && (dev->all_fan_stop == false))
 		{//Red blink
-
-			if(ioread32(dev->led_virtual + GPIO_DATAOUT) & RED)
-				iowrite32(RED, dev->led_virtual + GPIO_CLEARDATAOUT);
+			if(hardware_version == 0x01)
+			{
+			}
+			else
+			{
+				if(ioread32(dev->led_virtual + GPIO_DATAOUT) & RED)
+					iowrite32(RED, dev->led_virtual + GPIO_CLEARDATAOUT);
+				else
+					iowrite32(RED, dev->led_virtual + GPIO_SETDATAOUT);
+			}
+		}
+		else if(dev->all_fan_stop == true)
+		{
+			if(hardware_version == 0x01)
+				;
 			else
 				iowrite32(RED, dev->led_virtual + GPIO_SETDATAOUT);
-
-		}
-		else /*if(dev->all_fan_stop == true)*/if(can_send_work == false)
-		{
-			iowrite32(RED, dev->led_virtual + GPIO_SETDATAOUT);
 		}
 		else
 		{
-
-			iowrite32(RED, dev->led_virtual + GPIO_CLEARDATAOUT);
+			if(hardware_version == 0x01)
+				;
+			else
+				iowrite32(RED, dev->led_virtual + GPIO_CLEARDATAOUT);
 		}
 
 		if(network_keeping == true)
 		{//Green blink
-			//printk("network_keeping\n");
 			if(hardware_version == 0x01)
-			{
-				if(ioread32(dev->led_virtual1 + GPIO_DATAOUT) & GREEN)
-				{
-					iowrite32(GREEN, dev->led_virtual1 + GPIO_CLEARDATAOUT);
-					//printk("GREEN low\n");
-				}
-				else
-				{
-					iowrite32(GREEN, dev->led_virtual1 + GPIO_SETDATAOUT);
-					//printk("GREEN high\n");
-				}
-			}
+				;
 			else
 			{
 				if(ioread32(dev->led_virtual + GPIO_DATAOUT) & GREEN)
@@ -1432,7 +942,7 @@ no_send:
 		}
 		else
 			if(hardware_version == 0x01)
-				iowrite32(GREEN, dev->led_virtual1 + GPIO_CLEARDATAOUT);
+				;
 			else
 				iowrite32(GREEN, dev->led_virtual + GPIO_CLEARDATAOUT);
 	}
@@ -1441,37 +951,16 @@ no_send:
 		check_asic_status_timeout = jiffies + 60 * 1000 * HZ/1000; //60秒钟后超时
 		check_asic_status(dev);
     }
-	#ifdef S5_S_VL
-	if(time_after(jiffies, check_chain_power_timeout))
-	{
-		check_chain_power_timeout = jiffies + CHAIN_POWER_TIME_INTERAL * 60 * 1000 * HZ/1000; //60秒钟后超时
-		check_chain_power(dev);
-    }
-	#endif
 	if(time_after(jiffies, check_status_timeout))
 	{
-		#ifdef send_new_bl_CTRL
-		have_new_bl = false;
-		#endif
 		adjust_pwm_from_temp(dev);
 		check_fan_speed(dev);
 		check_status_timeout = jiffies + 10 * 1000 * HZ/1000; //10秒钟后超时
-	   	printk("\nchain exist: %x, g_TOTAL_FPGA_FIFO %#x,g_FPGA_RESERVE_FIFO_SPACE{%d}\n",dev->chain_exist, g_TOTAL_FPGA_FIFO, g_FPGA_RESERVE_FIFO_SPACE);
+	   	printk("chain exist: %x, g_TOTAL_FPGA_FIFO %#x,g_FPGA_RESERVE_FIFO_SPACE{%d}\n",dev->chain_exist, g_TOTAL_FPGA_FIFO, g_FPGA_RESERVE_FIFO_SPACE);
 		printk("g_FPGA_FIFO_SPACE %d, fifo_space{%d}\n",g_FPGA_FIFO_SPACE, fifo_space);
-		printk("ret_nonce_num = %d, snd_to_fpga_work{%d}\n",ret_nonce_num, snd_to_fpga_work);
-		printk("total ret nonce num = %llu, diff1_nonce num = %llu\n", dev->total_nonce_num, dev->diff1_num);
+		printk("total nonce num = %d, snd_to_fpga_work{%d}\n", ret_nonce_num, snd_to_fpga_work);
 		//printk("fpga_nonc1_num = %d\n", dev->fpga_nonce1_num);
 		printk("gDiff_nonce_num{%d}gNonce_Err{%d}\n", gDiff_nonce_num, gNonce_Err);
-		printk("gSubmit_nonce_num{%d}\n", gSubmit_nonce_num);
-		printk("chain%1d asic%02d ret nonce_num{%d}\n", prnt_chin_nu, prnt_aisc_nu, gAsic_cnt[prnt_chin_nu][prnt_aisc_nu]);
-		printk("dev->net_diff_sh_bit{%d}dev->get_blk_num{%d}\n", dev->net_diff_sh_bit, dev->get_blk_num);
-		printk("dev->temp_out_ctrl{%d}\n\n", dev->temp_out_ctrl);
-		if(++prnt_aisc_nu >= gChain_Asic_num[dev->chain_map[prnt_chin_nu]])
-		{
-			prnt_aisc_nu = 0;
-			if(++prnt_chin_nu >= dev->asic_status_data.chain_num)
-				prnt_chin_nu = 0;
-		}
 		//printk("fpga fifo st: {0x%04x}\n", dev->fpga_fifo_st);
 		if(dev->temp_out_fool == true)
 		{
@@ -1530,16 +1019,11 @@ static void Prnt(unsigned long data)
 	//iowrite32(0x01<<8, gpio2_vaddr + GPIO_SETDATAOUT);
 	//send_to_pfga_work(dev);
 	if(queue_work(dev->send_to_fpga_work_wq, &dev->send_to_fpga_work) != 1)
-	{
 		printk("send_to_fpga_work in queue\n");
-		if(dev->restarting_hash == true)
-			del_timer(&prnt_timer);
-	}
 	//if(dev->task_buffer_rd != dev->task_buffer_wr)// not empty
 	{
 		prnt_timer.expires = jiffies + dev->send_to_fpga_interval* HZ/1000;
-		if(dev->restarting_hash == false)
-			add_timer(&prnt_timer);
+		add_timer(&prnt_timer);
 	}
 	//iowrite32(0x01<<8, gpio2_vaddr + GPIO_CLEARDATAOUT);
 }
@@ -1591,7 +1075,7 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 					printk(KERN_ERR "New blok\n");
 				}
 				if(dev->cgminer_start == false)
-					bitmain_asic_get_status(NULL,dev->chain_map[0], 1, 0, 4); //CHIP_ADDR_REG 4  PLL reg
+					bitmain_asic_get_status(NULL,0, 1, 0, 4); //CHIP_ADDR_REG 4  PLL reg
 #if HAVE_NUM
 				task_work_num = txtask.work_num;
 #else
@@ -1624,29 +1108,13 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 					if(dev->asic_configure.diff_sh_bit != txtask->diff)
 					{
 						printk(KERN_ERR "Change diff to %d\n", txtask->diff);
-						dev->asic_configure.diff_sh_bit = txtask->diff;
-						dev->nonce_diff = dev->asic_configure.diff_sh_bit;
-						#if	defined S4_Board || defined C1_Board || defined S5 || defined S4_PLUS
-						if(dev->nonce_diff > AISC_RT_DIFF)
-						{
-							dev->nonce_diff = AISC_RT_DIFF;
-							printk(KERN_ERR "diff fix to %d\n", dev->nonce_diff);
-						}
-						#endif
-					}
-					if(dev->net_diff_sh_bit != txtask->net_diff)
-					{
-						printk(KERN_ERR "Change net_diff to %d\n", txtask->net_diff);
-						dev->net_diff_sh_bit = txtask->net_diff;
+						dev->nonce_diff = dev->asic_configure.diff_sh_bit = txtask->diff;
 					}
 				}
 				else
 					dev->asic_configure.diff_sh_bit = 0;
-				if(dev->cgminer_start == false)
-				{
-	            	dev->cgminer_start = true;
-					dev->cgminer_start_time = jiffies;
-				}
+				/**/
+            	dev->cgminer_start = true;
 				#if 0
 				if(g_FPGA_FIFO_SPACE <= g_FPGA_RESERVE_FIFO_SPACE)
 					nonce_query(dev);
@@ -1673,10 +1141,6 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 				dev->asic_configure.diff_sh_bit = dev->nonce_diff = 0;
 				dev->asic_configure.beep_on_en = bt_conf->beeper_ctrl;
 				dev->temp_out_ctrl = bt_conf->temp_over_ctrl;
-				dev->fan_ctrl_type = bt_conf->fan_ctrl_type;
-				//test
-				//dev->fan_ctrl_type = true;
-				//dev->temp_out_ctrl = false;
 				dev->total_nonce_num = dev->fpga_nonce1_num;
 				printk("btm_tx_conf\n");
 				if (bt_conf->reset)
@@ -1689,66 +1153,13 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 					printk("fan pwm valid {%d}\n", dev->asic_configure.fan_pwm_data);
 					//ChangePWM(dev->asic_configure.fan_pwm_data);
 				}
-				if (bt_conf->frequency_eft)
-				{
-					dev->asic_configure.frequency = bt_conf->frequency;
-					//set_frequency(dev->asic_configure.frequency);
-					printk("Set asic frequency {%d}\n", dev->asic_configure.frequency);
-				}
-				if (bt_conf->voltage_eft)
-				{
-					dev->asic_configure.voltage = htons(bt_conf->voltage); //voltage 需修改为16bit
-					if(dev->asic_configure.voltage < 0x0600)
-						dev->asic_configure.voltage = 0x0600;
-					else if(dev->asic_configure.voltage > 0x0900)
-						dev->asic_configure.voltage = 0x0900;
-					bitmain_set_voltage(dev, dev->asic_configure.voltage);
-				}
-				if (bt_conf->chain_check_time_eft)
-				{
-					dev->asic_configure.chain_check_time = bt_conf->chain_check_time;
-				}
-
-				if (bt_conf->timeout_eft)
-				{
-					dev->asic_configure.timeout_data = bt_conf->timeout_data;
-				}
-
-				if (bt_conf->chip_config_eft)
-				{
-					dev->asic_configure.chip_address = bt_conf->chip_address;
-					dev->asic_configure.reg_address = bt_conf->reg_address;
-					printk("Set chip_addr{%#x}reg_address{%#x}value{%#x}\n",
-						   dev->asic_configure.chip_address, dev->asic_configure.reg_address,
-						   bt_conf->reg_data);
-					reg_addr = dev->asic_configure.reg_address;
-					dev->asic_configure.reg_address = 0x0;
-					dev->asic_configure.reg_address = reg_addr;
-					if (dev->asic_configure.reg_address == 0x04)//频率寄存器地址
-					{
-						dev->asic_configure.freq_vlaue = bt_conf->reg_data;
-						set_frequency(dev, bt_conf->reg_data);
-					}
-					#ifndef S5_S_VL
-					//if(dev->asic_configure.timeout_data < 7)
-						set_baud(dev,10);
-						//set_baud(dev,5);
-					reg_addr = dev->asic_configure.reg_address;
-					dev->asic_configure.reg_address = 0x0;
-					sw_addr(dev);
-					dev->asic_configure.reg_address = reg_addr;
-					#endif
-				}
-				//先频率再设置timeout
 				if (bt_conf->timeout_eft)
 				{
 					dev->asic_configure.timeout_data = bt_conf->timeout_data;
 					printk(KERN_ERR "Timeout {%d}\n", dev->asic_configure.timeout_data);
-					#ifndef S5_S_VL
 					dev->timeout_valid = true;
 					nonce_query(dev);
 					dev->timeout_valid = false;
-					#endif
 					dev->send_to_fpga_interval = (dev->asic_configure.timeout_data * g_TOTAL_FPGA_FIFO * 4)/ dev->asic_status_data.chain_num / (sizeof(FPGA_WORK) - 4);
 					dev->send_to_fpga_interval /=4;
 					printk(KERN_ERR "Snd Time Interval {%d}ms\n", dev->send_to_fpga_interval);
@@ -1757,6 +1168,30 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 						dev->send_to_fpga_interval = 100;
 						printk(KERN_ERR "Adj Snd Time Interval {%d}ms\n", dev->send_to_fpga_interval);
 					//PR4 = (dev->asic_configure.timeout_data * (GetPeripheralClock() / 1000)) / 64;
+				}
+				if (bt_conf->frequency_eft)
+				{
+					dev->asic_configure.frequency = bt_conf->frequency;
+					//set_frequency(dev->asic_configure.frequency);
+					printk("Set asic frequency {%d}\n", dev->asic_configure.frequency);
+				}
+				if (bt_conf->voltage_eft)
+				{
+					dev->asic_configure.voltage = bt_conf->voltage;
+				}
+				if (bt_conf->chain_check_time_eft)
+				{
+					dev->asic_configure.chain_check_time = bt_conf->chain_check_time;
+				}
+				if (bt_conf->chip_config_eft)
+				{
+					dev->asic_configure.chip_address = bt_conf->chip_address;
+					dev->asic_configure.reg_address = bt_conf->reg_address;
+					printk("Set chip_addr{%#x}reg_address{%#x}value{%#x}\n",
+						   dev->asic_configure.chip_address, dev->asic_configure.reg_address,
+						   bt_conf->reg_data);
+					if (dev->asic_configure.reg_address == 0x04)//频率寄存器地址
+						set_frequency(dev, bt_conf->reg_data);
 				}
 				dev->hw_error_eft = bt_conf->hw_error_eft;
 				//dev->cgminer_start = true;
@@ -1769,7 +1204,6 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 				if (bt_gt_status->detect_get)
 				{
 					asic_reset = true;
-					dev->asic_configure.bauddiv = 26;
 					printk(KERN_ERR "Detect device\n");
 					detect_chain_num(dev);
 				}
@@ -1779,8 +1213,6 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 					dev->asic_configure.reg_address = bt_gt_status->reg_addr;
 					//bitmain_asic_get_status(NULL, 1, 0, 4); //CHIP_ADDR_REG 4  PLL reg
 				}
-				if(bt_gt_status->test_hash == 0xba)
-					nonce_query(dev);
 				dev->get_status = true;
 				//printk("Get status\n");
 			}
@@ -1797,7 +1229,6 @@ static ssize_t bitmain_asic_write(struct file *file, const char __user *user_buf
 				asic_result_status_rd = asic_result_status_wr = asic_result_status_full = 0;
 				asic_result_rd = asic_result_wr = asic_result_full = 0;
 				gDiff_nonce_num = gNonce_num = gNonce_Err = gNonce_miss = 0;
-				gSubmit_nonce_num = 0;
 				dev->task_buffer_full = false;
 				dev->task_buffer_rd = dev->task_buffer_wr;
 				#if 0
@@ -1836,16 +1267,13 @@ static int create_rx_status_struct(struct BITMAIN_STATUS_DATA *rx_status_data, b
     rx_status_data->fifo_space = fifo_sapce;
 	rx_status_data->nonce_err = gNonce_Err;
 	rx_status_data->hw_version = (DRIVER_VER <<16)|(dev->fpga_version<<8)|(dev->pcb_version);
-	rx_status_data->get_blk_num = dev->get_blk_num & 0x0f;
     pos = 28;
 	//pos += rx_status_data->chain_num * sizeof(rx_status_data->chain_asic_exist[0]);
 	//printk("rx_status_data->chain_num{%d}\n", rx_status_data->chain_num);
 	for (i = 0; i < rx_status_data->chain_num; i++)
     {
-		#if 0 //S2  FPGA pin debug 添加
 		if(gChain_Asic_num[dev->chain_map[i]] == 0)
 			continue;
-		#endif
 		if(gChain_Asic_num[dev->chain_map[i]] == 0)
 			gChain_Asic_num[dev->chain_map[i]] = 1;
 		for(j = 0; j < (((gChain_Asic_num[dev->chain_map[i]] -1)>>5) + 1); j++)
@@ -1952,16 +1380,16 @@ static ssize_t bitmain_asic_read(struct file *file, char __user *userbuf,
         uint16_t crc16;
         bitmain_result.data_type = BM_RX_NONCE;
 		bitmain_result.version = 0x00;
-		bitmain_result.nonce_diff = dev->nonce_diff;
+		//bitmain_result.nonce_diff = dev->nonce_diff;
+		bitmain_result.nonce_diff = 0;
 		bitmain_result.total_nonce_num = dev->total_nonce_num;
-		//bitmain_result.total_nonce_num = dev->diff1_num; //cgminer 不通过nonce diff计算时
         do
         {
             memcpy(&bitmain_result.nonce[nonce_num], (void*)&asic_result[asic_result_rd], sizeof (asic_result[0]));
             nonce_num++;
 			//printk(KERN_ERR "work_id{%d}rd{%d}wr{%d}\n",asic_result[asic_result_rd].work_id, asic_result_rd, asic_result_wr);
             increase_variable_rehead_U16(&asic_result_rd, ASIC_RESULT_NUM);
-			gSubmit_nonce_num++;
+
         }
         //while ((asic_result_rd != asic_result_wr) && (nonce_num < 7));//为了不超过64字节
         while ((asic_result_rd != asic_result_wr) && (nonce_num < 128));
@@ -2034,7 +1462,8 @@ static ssize_t bitmain_asic_read(struct file *file, char __user *userbuf,
         uint16_t crc16;
         bitmain_result.data_type = BM_RX_NONCE;
 		bitmain_result.version = 0x00;
-		bitmain_result.nonce_diff = dev->nonce_diff;
+		//bitmain_result.nonce_diff = dev->nonce_diff;
+		bitmain_result.nonce_diff = 0;
 		bitmain_result.total_nonce_num = dev->total_nonce_num;
 		if(sizeof(bitmain_result.fifo_space) == 1)
 		{
@@ -2056,7 +1485,7 @@ static ssize_t bitmain_asic_read(struct file *file, char __user *userbuf,
 			retval = -EFAULT;
 		}
 		//printk(KERN_ERR "ttn %llu\n", dev->total_nonce_num);
-		ret_ttn_timeout = jiffies + 1000 * HZ/1000;//1000ms;
+		ret_ttn_timeout = jiffies + 5000 * HZ/1000;//5000ms;
 	}
 	#endif
 	mutex_unlock(&dev->result_lock);
@@ -2219,7 +1648,6 @@ static long bitmain_asic_ioctl(struct file *file,
 	wait_queue_head_t timeout_wq;
 	switch (cmd) {
 		case START_CONFIG:
-			config_fpga = 1;
 			ctl_md_vaddr = ioremap_nocache(CONTROL_MODULE_BASE, CONTROL_MODULE_Size);
 			//Set SPI1 D0 to GPIO mode
 			iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + conf_mcasp0_fsx); //D0 MISO
@@ -2260,7 +1688,7 @@ static long bitmain_asic_ioctl(struct file *file,
 			break;
 		case CONFIG_DATA:
 			copy_from_user((unsigned char*)&fdata, (unsigned char*)arg, sizeof(fdata));
-			//printk("fdata.pdata{%#x}len{%d}\n", (unsigned int)fdata.pdata, fdata.data_len);
+			printk("fdata.pdata{%#x}len{%d}\n", (unsigned int)fdata.pdata, fdata.data_len);
 			copy_from_user(data_buffer, (unsigned char*)fdata.pdata, fdata.data_len);
 			for(j = 0; j < fdata.data_len; j++)
 			{
