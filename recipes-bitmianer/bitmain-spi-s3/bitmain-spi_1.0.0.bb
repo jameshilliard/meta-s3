@@ -29,17 +29,6 @@ inherit module
 do_compile () {
 	echo "compile bitmain-spi"
 	unset CFLAGS CPPFLAGS CXXFLAGS LDFLAGS CC LD CPP
-	if [ x"C1" == x"${Miner_TYPE}" ]; then
-		export BOARD_TYPE="-DC1_02"
-	elif [ x"C2" == x"${Miner_TYPE}" ]; then
-		export BOARD_TYPE="-DC1_02"
-	elif [ x"S5" == x"${Miner_TYPE}" ]; then
-		export BOARD_TYPE="-DS5"
-	elif [ x"S2" == x"${Miner_TYPE}" ]; then
-		export BOARD_TYPE="-DS2"
-	elif [ x"S4+" == x"${Miner_TYPE}" ]; then
-		export BOARD_TYPE="-DS4_PLUS"
-	fi
 	oe_runmake 'MODPATH="${D}${base_libdir}/modules/${KERNEL_VERSION}/kernel/drivers"' \
 		'KERNEL_SOURCE="${STAGING_KERNEL_DIR}"' \
 		'KDIR="${STAGING_KERNEL_DIR}"' \
