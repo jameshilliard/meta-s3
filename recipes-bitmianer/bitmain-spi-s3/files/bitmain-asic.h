@@ -38,7 +38,8 @@ struct BITMAIN_CONFIGURE {
     uint8_t hw_error_eft : 1;
 	uint8_t beeper_ctrl : 1;
 	uint8_t temp_over_ctrl : 1;
-	uint8_t reserved1 : 6;
+	uint8_t fan_ctrl_type : 1; //0: normal 1: home
+	uint8_t reserved1 : 5;
 
 	uint8_t chain_check_time;
 	uint8_t reserved2;
@@ -76,7 +77,7 @@ struct BITMAIN_TASK {
 	uint8_t new_block            :1;
 	uint8_t reserved            :7;
 	uint8_t	diff;
-	uint8_t reserved2[2];
+	uint16_t net_diff;
 	struct ASIC_TASK asic_task[64];
 	uint16_t crc;
 }PACKED;
@@ -114,7 +115,8 @@ struct BITMAIN_GET_STATUS {
 	uint8_t reserved1            :6;
 
 	/*uint8_t rchipd_eft;*/
-	uint8_t reserved[3];
+	uint8_t test_hash; //0xba
+	uint8_t reserved[2];
 	//uint32_t reg_data;
 	uint8_t chip_address;
 	uint8_t reg_addr;
@@ -151,7 +153,8 @@ struct BITMAIN_STATUS_DATA {
     uint16_t length;
 
     uint8_t chip_value_eft : 1;
-    uint8_t reserved1 : 7;
+    uint8_t reserved1 : 3;
+	uint8_t get_blk_num : 4;
 	uint8_t chain_num;
 	uint16_t fifo_space;
     uint32_t hw_version;
@@ -208,6 +211,7 @@ typedef struct {
 	uint8_t bauddiv;
 	uint16_t voltage;
     uint16_t frequency;
+	uint16_t freq_vlaue;
 
     uint8_t chain_check_time;
     uint8_t chip_address;
@@ -215,10 +219,6 @@ typedef struct {
 	bool	beep_on_en;
 	bool	snd_work_when_temp_h;
 } ASIC_CONFIGURE;
-
-//GPIO2_2(Green) GPIO2_5(Red)
-#define GREEN	(0x01<<2)
-#define RED		(0x01<<5)
 
 typedef struct __BT_AS_info {
 	int64_t diff1_num;
@@ -249,12 +249,14 @@ typedef struct __BT_AS_info {
 	uint8_t fan_map[CHAIN_SIZE];
 	uint8_t fan_speed[CHAIN_SIZE];
 
-	int8_t temp[CHAIN_SIZE];
+	uint8_t temp[CHAIN_SIZE];
 	uint8_t temp_highest;
+	uint8_t pwm_percent;
 	uint32_t pwm_high_value;
 	uint32_t pwm_low_value;
 	uint32_t send_to_fpga_interval;
 	unsigned long last_nonce_timeout;
+	unsigned long cgminer_start_time;
 	#if 0
 	unsigned int task_lllast_num[CHAIN_SIZE];
     unsigned int task_llast_num[CHAIN_SIZE];
@@ -275,11 +277,18 @@ typedef struct __BT_AS_info {
 	bool clear_fpga_fifo;
 	bool hw_error_eft;
 	bool timeout_valid;
+	bool fan_ctrl_type; //0: nomarl 1: home
 	bool temp_out_fool;
+	bool temp_out_high;
 	bool temp_out_ctrl;
 	bool all_fan_stop;
+	bool any_fan_fail;
 	bool beep_ctrl;
 	bool beep_status;
+	bool wait_timeout;
+	bool restarting_hash;
+	uint16_t net_diff_sh_bit;
+	uint8_t get_blk_num;
 	uint16_t nonce_diff;
 	uint32_t fpga_nonce1_num;
     ASIC_CONFIGURE asic_configure;
@@ -297,10 +306,39 @@ version3: s3 nand boot 兼容S2 sd boot harward_version =001
 ******************************************/
 #undef DRIVER_VER
 #define DRIVER_VER 0x03
+#define BM_1382
+
+#define S4_Board
+#define AISC_RT_DIFF	0x06 //diff = 2^6 = 64
+//不定义时，由硬件自动判断
+//sd start lcd无调整	0x7
+//sd start lcd调整		0x0
+//nand flash start 			0x01
+//C1 53 54 green led 不兼容nand flash 0x02
+//C1.1 兼容nand flash start 			0x01，焊接为0x06
+#define FIX_HARDWARE_VER	0x1
+
+
+//#define C1_02
+#if defined C1_02
+//#error "defined C1_02"
+	#undef FIX_HARDWARE_VER
+	#define FIX_HARDWARE_VER	0x2
+	#undef S4_Board
+	#define C1_Board
+#elif defined S5 || defined S4_PLUS
+	#undef S4_Board
+	#define S5_S_VL
+	//#ifdef S5
+		#define CTL_ASIC_CORE
+	//#endif
+#endif
+
+//#define S5_S_VL
 
 //防止full，预留位置，存储已发送的上几个数据
 //#define TASK_BUFFER_NUMBER	(64*CHAIN_SIZE)
-#define TASK_BUFFER_NUMBER		8192
+#define TASK_BUFFER_NUMBER		(2*8192)
 
 //#define CHECK_WORK_NUM		(32 * 3)
 #define CHECK_WORK_NUM		(32 * 2)
@@ -310,8 +348,12 @@ version3: s3 nand boot 兼容S2 sd boot harward_version =001
 
 extern unsigned int gNonce_num, gNonce_Err, gNonce_miss, gDiff_nonce_num;
 extern uint32_t gAsic_cnt[CHAIN_SIZE][256];
+extern uint32_t Chain_nonce_nu[CHAIN_SIZE];
+
 extern uint16_t gTotal_asic_num;
 extern uint8_t gChain_Asic_Check_bit[CHAIN_SIZE];
+extern uint8_t gChain_Asic_Interval[CHAIN_SIZE];
+
 extern uint8_t gChain_Asic_num[CHAIN_SIZE];
 extern uint32_t gChain_Asic_status[CHAIN_SIZE][256/32];
 
@@ -319,10 +361,19 @@ extern uint32_t ret_nonce_num;
 extern uint32_t snd_to_fpga_work;
 extern bool fpga_ret_prnt;
 
+//GPIO2_2(Green) GPIO2_5(Red)
+//#define GREEN	(0x01<<2)
+//#define RED		(0x01<<5)
+
+extern unsigned int GREEN, RED;
+extern struct __BT_AS_info bitmain_asic_dev;
+extern void *gpio0_vaddr;
+
 extern int hashtest(ASIC_TASK_P asic_task, uint32_t nonce);
 extern void dump_hex(uint8_t *data, uint16_t len);
 void send_to_pfga_work(struct work_struct *work);
 void init_beep(BT_AS_INFO dev);
+void stop_work_to_all_chain(BT_AS_INFO dev);
 
 
 static inline void decrease_variable_rehead_U32(uint32_t *num, uint32_t all_size)
@@ -349,8 +400,3 @@ static inline void increase_variable_rehead_U8(uint8_t *num, uint8_t all_size)
 }
 
 #endif
-
-
-
-
-

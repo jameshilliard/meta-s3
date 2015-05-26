@@ -5,6 +5,7 @@
 #include <linux/wait.h>
 #include <asm/system.h>
 #include <linux/mutex.h>
+#include <linux/delay.h>
 #include "spi.h"
 
 void *spi_vaddr, *gpio3_vaddr, *gpio2_vaddr;
@@ -71,12 +72,19 @@ void spi_init(void)
 	//iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + conf_mcasp0_ahclkx); //GPIO3_21
 	iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x8a0); //GPIO2_6  lcd data0
 	iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x8a8); //GPIO2_8 lcd data2
+	#if defined S2
+	iowrite32(PAD_PULLUP | 0x7, ctl_md_vaddr + 0x8a4); //GPIO2_7  lcd data1
+	#endif
 	iounmap(ctl_md_vaddr);
 	gpio2_vaddr = ioremap_nocache(GPIO2_BASE, GPIO2_SIZE);
 	value32 = ioread32(gpio2_vaddr + GPIO_OE);
 	iowrite32(value32 & (~(0x01 << 6)), gpio2_vaddr + GPIO_OE); //set output
 	value32 = ioread32(gpio2_vaddr + GPIO_OE);
 	iowrite32(value32 & (~(0x01 << 8)), gpio2_vaddr + GPIO_OE); //set output
+	#if defined S2
+	value32 = ioread32(gpio2_vaddr + GPIO_OE);
+	iowrite32(value32 & (~(0x01 << 7)), gpio2_vaddr + GPIO_OE); //set output
+	#endif
 	spi_vaddr = ioremap_nocache(McSpi1_Base, McSpi1_Size);
 	printk("spi_vaddr %#x\n", (uint32_t)spi_vaddr);
 	printk("version %#x\n", ioread32(spi_vaddr + OMAP2_MCSPI_REVISION));
@@ -480,7 +488,7 @@ int spi_tranfer(uint8_t cmd, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data
 				if(0 == wait_event_interruptible_timeout(spi_dev.wait_transfer_complete, spi_dev.have_wake_up == true, 10 * HZ/1000))//10ms
 				{
 					iowrite32(ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE) & (~ (EOW|TX0_EMPTY)), spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE);
-					iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
+					//iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
 					cnt = 0;
 					while(00 == (ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_CHSTAT0) & (0x01<<5)))
 					{
@@ -499,7 +507,7 @@ int spi_tranfer(uint8_t cmd, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data
 						printk("22wk up err\n");
 					iowrite32(ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE) & (~EOW), spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE);
 					//*rx_len = 0;
-					iowrite32(0x01<<6, gpio2_vaddr + GPIO_CLEARDATAOUT);
+					//iowrite32(0x01<<6, gpio2_vaddr + GPIO_CLEARDATAOUT);
 				}
 				else
 				{
@@ -580,18 +588,21 @@ int spi_tranfer(uint8_t cmd, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data
 			{
 				iowrite32(tx_data[i], spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_TX0);
 			}
-			local_irq_save(flags);
 			//iowrite32(0x01<<8, gpio2_vaddr + GPIO_CLEARDATAOUT);
+			local_irq_restore(flags);
+			if(cmd == 0)
+				udelay(10);
+				//printk("tx_len = %d\n", tx_len);
 			if(0 == wait_event_interruptible_timeout(spi_dev.wait_transfer_complete, spi_dev.have_wake_up == true, 10 * HZ/1000))//10ms
 			{
-				iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
+				//iowrite32(0x01<<6, gpio2_vaddr + GPIO_SETDATAOUT);
 				if(spi_dev.have_wake_up == false)
 					printk(KERN_ERR "111spi transfer timeout IRQSTATUS{%#x}IRQENABLE{%#x}XFERLEVEL{%#x}CHSTAT0{%#x}\n", ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQSTATUS),
 						ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE),ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_XFERLEVEL),ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_CHSTAT0));
 				else
 					printk("11wk up err\n");
 				iowrite32(ioread32(spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE) & (~EOW), spi_vaddr + OMAP2_MCSPI_OFFSET + OMAP2_MCSPI_IRQENABLE);
-				iowrite32(0x01<<6, gpio2_vaddr + GPIO_CLEARDATAOUT);
+				//iowrite32(0x01<<6, gpio2_vaddr + GPIO_CLEARDATAOUT);
 			}
 			break;
 	}

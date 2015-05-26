@@ -8,7 +8,8 @@
 
 typedef struct {
     uint8_t block_type;
-    uint8_t reserved1[3];
+	uint8_t chain_id;
+    uint8_t reserved1[2];
    	uint8_t midstate[32];
 	uint32_t work_id;
 	uint8_t data[12];
@@ -16,17 +17,29 @@ typedef struct {
 typedef struct {
     uint8_t cmd_type;
     uint8_t chain_num;
-   	uint8_t reserved1[2];
+   	uint8_t reserved1[1];
+	/*
+	115.200 115.740 26	216
+	460.800 446.429 6	56
+	921.600 1.041.666	2	24
+	1.500.000	1.562.500	1	16
+	*/
+	uint8_t bauddiv; //5-3: res 4:0
 	uint8_t cmd[4];
 } FPGA_ASIC_CMD;
 
 typedef struct {
     uint8_t cmd_type;
-   	uint8_t reserved1[3];
+   	uint8_t reserved1[2];
+	uint8_t rst_time : 7;
+	uint8_t rst_valid : 1;
 	uint16_t pwm_h;
 	uint16_t pwm_l;
 	uint32_t toctl;
-	uint8_t reserved2[48 - 8];
+	uint32_t tm; //12-15
+	uint32_t hcn; //16-19
+	uint32_t sno;//20-23
+	uint8_t reserved2[48 - 8 -12];
 } FPGA_QUERY;
 
 #if 0
@@ -78,7 +91,7 @@ typedef struct {
 	uint32_t nonce;
 	uint16_t work_id;
 	//uint8_t reserved;
-	int8_t temp;;
+	uint8_t temp;;
 	//uint8_t chain_num;
 	uint8_t chain_num : 4;
 	uint8_t reserved1 : 2;
@@ -97,12 +110,16 @@ extern uint32_t asic_result_status[512];
 #define ASIC_RESULT_STATUS_NUM		(sizeof(asic_result_status)/sizeof(asic_result_status[0]))
 
 extern int nonce_query(BT_AS_INFO dev);
-extern int send_work_to_fpga(bool new_block, BT_AS_INFO dev, ASIC_TASK_P asic_work);
+extern int send_work_to_fpga(bool new_block, unsigned char chain_id, BT_AS_INFO dev, ASIC_TASK_P asic_work);
 extern int send_BC_to_fpga(uint8_t chain_num, uint8_t *cmd);
 extern void clear_fpga_nonce_buffer(BT_AS_INFO dev);
 extern void set_frequency(BT_AS_INFO dev, unsigned int freq);
 extern void rev(unsigned char *s, size_t l);
+extern void rst_hash_asic(BT_AS_INFO dev);
 extern void detect_chain_num(BT_AS_INFO dev);
 extern int bitmain_asic_get_status(char* buf, char chain, char mode, char chip_addr, char reg_addr);
+extern void bitmain_set_voltage(BT_AS_INFO dev, unsigned short voltage);
+extern void set_baud(BT_AS_INFO dev, unsigned char bauddiv);
+extern void sw_addr(BT_AS_INFO dev);
 
 #endif
